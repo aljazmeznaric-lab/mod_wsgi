@@ -62,6 +62,7 @@ static PyTypeObject Auth_Type;
 #include "wsgi_daemon.h"
 #include "wsgi_buckets.h"
 #include "wsgi_thread.h"
+#include "wsgi_status.h"
 
 /* Module information. */
 
@@ -7192,6 +7193,20 @@ static int wsgi_hook_handler(request_rec *r)
     const char *tenc = NULL;
     const char *lenp = NULL;
 
+    /*
+     * Handle /wsgi-status endpoint if server metrics are enabled.
+     * This runs in the Apache worker process (not daemon) so it's
+     * always available even when all WSGI daemon workers are busy.
+     * Check this before handler validation so it works regardless
+     * of how the URL is configured.
+     */
+
+    if (wsgi_server_config && wsgi_server_config->server_metrics) {
+        if (r->uri && strcmp(r->uri, "/wsgi-status") == 0) {
+            return wsgi_status_handler(r);
+        }
+    }
+
     /* Filter out the obvious case of no handler defined. */
 
     if (!r->handler)
@@ -10353,6 +10368,26 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
                                 APR_THREAD_MUTEX_UNNESTED, p);
 
         /*
+         * Initialize status tracking database if server metrics are enabled.
+         * The database is shared across all daemon processes for cross-process
+         * visibility of active requests.
+         */
+
+        if (daemon->group->server_metrics) {
+            const char *status_db_path;
+
+            status_db_path = apr_pstrcat(p, wsgi_server_config->socket_prefix,
+                                         "_status.db", NULL);
+
+            if (wsgi_status_init(wsgi_daemon_pool, status_db_path) != 0) {
+                ap_log_error(APLOG_MARK, APLOG_WARNING, 0, wsgi_server,
+                             "mod_wsgi (pid=%d): Failed to initialize status "
+                             "tracking for daemon process '%s'.",
+                             getpid(), daemon->group->name);
+            }
+        }
+
+        /*
          * Initialise Python if required to be done in the child
          * process. Note that it will not be initialised if
          * mod_python loaded and it has already been done.
@@ -13315,9 +13350,34 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
      */
 
     if (!queue_timeout_occurred) {
+        /*
+         * Track request start in status database if server metrics enabled.
+         * This allows monitoring of active requests across all daemon processes.
+         */
+        if (wsgi_daemon_process->group->server_metrics) {
+            WSGIThreadInfo *thread_info = wsgi_thread_info(0, 0);
+            int worker_id = thread_info ? thread_info->thread_id : 0;
+
+            wsgi_status_request_start(
+                r->log_id,
+                wsgi_daemon_process->group->name,
+                worker_id,
+                getpid(),
+                r->uri,
+                r->method
+            );
+        }
+
         if (wsgi_execute_script(r) != OK) {
             r->status = HTTP_INTERNAL_SERVER_ERROR;
             r->status_line = "200 Error";
+        }
+
+        /*
+         * Track request end in status database.
+         */
+        if (wsgi_daemon_process->group->server_metrics) {
+            wsgi_status_request_end(r->log_id);
         }
     }
 
@@ -13557,6 +13617,18 @@ static void wsgi_hook_child_init(apr_pool_t *p, server_rec *s)
 
     apr_thread_mutex_create(&wsgi_monitor_lock,
                             APR_THREAD_MUTEX_UNNESTED, p);
+
+    /*
+     * Set the path to the status database for /wsgi-status endpoint.
+     * The database is created by daemon processes, but we need to know
+     * the path in the Apache worker process to serve the status endpoint.
+     */
+
+    if (wsgi_server_config && wsgi_server_config->server_metrics &&
+            wsgi_server_config->socket_prefix) {
+        wsgi_status_db_path = apr_pstrcat(p, wsgi_server_config->socket_prefix,
+                                          "_status.db", NULL);
+    }
 
     if (wsgi_python_required) {
         /*

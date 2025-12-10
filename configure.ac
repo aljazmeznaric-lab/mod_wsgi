@@ -221,6 +221,10 @@ CFLAGS="${CFLAGS1} ${CFLAGS2}"
 LDFLAGS="${LDFLAGS} ${LDFLAGS1} ${LDFLAGS2} ${LDFLAGS3}"
 LDLIBS="${LDLIBS} ${LDLIBS1} ${LDLIBS2} ${LDLIBS3}"
 
+dnl Check for SQLite3 library (required for wsgi-status feature)
+AC_CHECK_LIB([sqlite3], [sqlite3_open], [LDLIBS="${LDLIBS} -lsqlite3"],
+    [AC_MSG_ERROR([SQLite3 library is required. Install libsqlite3-dev or sqlite-devel.])])
+
 AC_SUBST(CFLAGS)
 AC_SUBST(LDFLAGS)
 AC_SUBST(LDLIBS)
