@@ -23,6 +23,7 @@
 #include <sqlite3.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <stdlib.h>
 
 /* ------------------------------------------------------------------------- */
 
@@ -130,9 +131,17 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
         NULL, NULL, NULL);
     
     /* 
-     * Perform a checkpoint to ensure WAL and SHM files are created,
-     * then set permissions on all database files.
+     * Insert and delete a dummy row to force WAL file creation.
+     * Just creating tables doesn't necessarily create the WAL files.
      */
+    sqlite3_exec(db, 
+        "INSERT INTO active_requests VALUES ('_init_', '_init_', 0, 0, '', '', 0)",
+        NULL, NULL, NULL);
+    sqlite3_exec(db,
+        "DELETE FROM active_requests WHERE request_id = '_init_'",
+        NULL, NULL, NULL);
+    
+    /* Checkpoint to flush WAL to main database */
     sqlite3_wal_checkpoint(db, NULL);
     
     sqlite3_close(db);
@@ -140,8 +149,8 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
     /* 
      * Set file permissions to allow daemon processes to access.
      * Mode 0666 allows read/write for owner, group, and others.
-     * This must be done AFTER enabling WAL mode because WAL mode
-     * creates the -wal and -shm files.
+     * This must be done AFTER enabling WAL mode and doing writes
+     * because WAL mode creates the -wal and -shm files on first write.
      */
     chmod(db_path, 0666);
     
@@ -152,6 +161,27 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
         chmod(wal_path, 0666);
         chmod(shm_path, 0666);
     }
+    
+#ifdef __linux__
+    /*
+     * On SELinux-enabled systems, set the correct security context
+     * so that httpd daemon processes can access the files.
+     * Use the same context as httpd's runtime files.
+     */
+    {
+        char *cmd;
+        
+        /* Set SELinux context to httpd_sys_rw_content_t for read-write access */
+        cmd = apr_psprintf(pool, "/usr/bin/chcon -t httpd_sys_rw_content_t '%s' 2>/dev/null", db_path);
+        system(cmd);
+        
+        cmd = apr_psprintf(pool, "/usr/bin/chcon -t httpd_sys_rw_content_t '%s-wal' 2>/dev/null", db_path);
+        system(cmd);
+        
+        cmd = apr_psprintf(pool, "/usr/bin/chcon -t httpd_sys_rw_content_t '%s-shm' 2>/dev/null", db_path);
+        system(cmd);
+    }
+#endif
     
     ap_log_error(APLOG_MARK, APLOG_INFO, 0, NULL,
                  "mod_wsgi (pid=%d): Status database created at '%s'",
