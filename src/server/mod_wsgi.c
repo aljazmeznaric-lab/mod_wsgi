@@ -10373,11 +10373,21 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
          * visibility of active requests.
          */
 
+        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, wsgi_server,
+                     "mod_wsgi (pid=%d): Daemon init status check: "
+                     "group=%s server_metrics=%d",
+                     getpid(), daemon->group->name,
+                     daemon->group->server_metrics);
+
         if (daemon->group->server_metrics) {
             const char *status_db_path;
 
             status_db_path = apr_pstrcat(p, wsgi_server_config->socket_prefix,
                                          "_status.db", NULL);
+
+            ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, wsgi_server,
+                         "mod_wsgi (pid=%d): Initializing status tracking for '%s' at '%s'",
+                         getpid(), daemon->group->name, status_db_path);
 
             if (wsgi_status_init(wsgi_daemon_pool, status_db_path) != 0) {
                 ap_log_error(APLOG_MARK, APLOG_WARNING, 0, wsgi_server,
@@ -13551,12 +13561,24 @@ static int wsgi_hook_init(apr_pool_t *pconf, apr_pool_t *ptemp,
      */
 
 #if defined(MOD_WSGI_WITH_DAEMONS)
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                 "mod_wsgi (pid=%d): Status DB check: config=%p server_metrics=%d socket_prefix=%s",
+                 getpid(), 
+                 wsgi_server_config,
+                 wsgi_server_config ? wsgi_server_config->server_metrics : -1,
+                 wsgi_server_config && wsgi_server_config->socket_prefix ? 
+                     wsgi_server_config->socket_prefix : "(null)");
+
     if (wsgi_server_config && wsgi_server_config->server_metrics &&
             wsgi_server_config->socket_prefix) {
         const char *status_db_path;
 
         status_db_path = apr_pstrcat(pconf, wsgi_server_config->socket_prefix,
                                      "_status.db", NULL);
+
+        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                     "mod_wsgi (pid=%d): Creating status database at '%s'",
+                     getpid(), status_db_path);
 
         if (wsgi_status_create_db(pconf, status_db_path) != 0) {
             ap_log_error(APLOG_MARK, APLOG_WARNING, 0, NULL,
