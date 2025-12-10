@@ -149,6 +149,17 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
 {
     int rc;
     
+    /* Debug: log init start */
+    {
+        FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+        if (fp) {
+            fprintf(fp, "wsgi_status_init START: pid=%d db_path=%s pool=%p\n",
+                    getpid(), db_path ? db_path : "(null)", (void*)pool);
+            fflush(fp);
+            fclose(fp);
+        }
+    }
+    
     if (!db_path || !*db_path) {
         return -1;
     }
@@ -211,6 +222,18 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
     /* Register cleanup callback */
     apr_pool_cleanup_register(pool, NULL, wsgi_status_pool_cleanup,
                               apr_pool_cleanup_null);
+    
+    /* Debug: log successful init */
+    {
+        FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+        if (fp) {
+            fprintf(fp, "wsgi_status_init SUCCESS: pid=%d db=%p insert=%p delete=%p\n",
+                    getpid(), (void*)wsgi_status_db, 
+                    (void*)wsgi_status_insert_stmt, (void*)wsgi_status_delete_stmt);
+            fflush(fp);
+            fclose(fp);
+        }
+    }
     
     ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
                  "mod_wsgi (pid=%d): Status database initialized at '%s' "
@@ -305,6 +328,17 @@ void wsgi_status_cleanup(pid_t pid)
 {
     sqlite3_stmt *stmt;
     
+    /* Debug: log when cleanup is called */
+    {
+        FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+        if (fp) {
+            fprintf(fp, "wsgi_status_cleanup called: pid=%d current_pid=%d db=%p\n",
+                    pid, getpid(), (void*)wsgi_status_db);
+            fflush(fp);
+            fclose(fp);
+        }
+    }
+    
     if (!wsgi_status_db) {
         return;
     }
@@ -321,6 +355,16 @@ void wsgi_status_cleanup(pid_t pid)
     
     /* If this is a full cleanup (process shutdown), close everything */
     if (pid == getpid()) {
+        /* Debug: log that we're closing the database */
+        {
+            FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+            if (fp) {
+                fprintf(fp, "CLOSING DATABASE! pid=%d\n", getpid());
+                fflush(fp);
+                fclose(fp);
+            }
+        }
+        
         if (wsgi_status_insert_stmt) {
             sqlite3_finalize(wsgi_status_insert_stmt);
             wsgi_status_insert_stmt = NULL;
