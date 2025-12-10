@@ -8706,7 +8706,7 @@ static void wsgi_process_socket(apr_pool_t *p, apr_socket_t *sock,
     ap_sb_handle_t *sbh;
     core_net_rec *net;
 
-    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, wsgi_server,
                  "mod_wsgi (pid=%d): wsgi_process_socket called for group '%s'",
                  getpid(), daemon->group->name);
 
