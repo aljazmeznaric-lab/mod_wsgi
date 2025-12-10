@@ -8698,6 +8698,10 @@ static void wsgi_process_socket(apr_pool_t *p, apr_socket_t *sock,
     ap_sb_handle_t *sbh;
     core_net_rec *net;
 
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                 "mod_wsgi (pid=%d): wsgi_process_socket called for group '%s'",
+                 getpid(), daemon->group->name);
+
     /*
      * This duplicates Apache connection setup. This is done
      * here rather than letting Apache do it so that avoid the
