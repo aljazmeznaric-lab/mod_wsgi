@@ -129,13 +129,23 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
         "CREATE INDEX IF NOT EXISTS idx_active_requests_pid ON active_requests(pid)",
         NULL, NULL, NULL);
     
+    /* 
+     * Perform a checkpoint to ensure WAL and SHM files are created,
+     * then set permissions on all database files.
+     */
+    sqlite3_wal_checkpoint(db, NULL);
+    
     sqlite3_close(db);
     
-    /* Set file permissions to allow daemon processes to access */
-    /* Mode 0666 allows read/write for owner, group, and others */
+    /* 
+     * Set file permissions to allow daemon processes to access.
+     * Mode 0666 allows read/write for owner, group, and others.
+     * This must be done AFTER enabling WAL mode because WAL mode
+     * creates the -wal and -shm files.
+     */
     chmod(db_path, 0666);
     
-    /* Also set permissions on WAL file if it was created */
+    /* Set permissions on WAL and SHM files created by WAL mode */
     {
         char *wal_path = apr_pstrcat(pool, db_path, "-wal", NULL);
         char *shm_path = apr_pstrcat(pool, db_path, "-shm", NULL);
@@ -159,7 +169,6 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
 int wsgi_status_init(apr_pool_t *pool, const char *db_path)
 {
     int rc;
-    char *errmsg = NULL;
     
     if (!db_path || !*db_path) {
         return -1;
@@ -167,8 +176,14 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
     
     wsgi_status_db_path = apr_pstrdup(pool, db_path);
     
-    /* Open database connection (file should already exist) */
-    rc = sqlite3_open(db_path, &wsgi_status_db);
+    /* 
+     * Open database connection with explicit read-write mode.
+     * The file should already exist (created by parent process).
+     * WAL mode is already configured by the parent, so we don't
+     * need to set it again.
+     */
+    rc = sqlite3_open_v2(db_path, &wsgi_status_db, 
+                         SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL,
                      "mod_wsgi (pid=%d): Failed to open status database '%s': %s",
@@ -179,18 +194,6 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
         }
         return -1;
     }
-    
-    /* Enable WAL mode for concurrent access from multiple processes */
-    rc = sqlite3_exec(wsgi_status_db, "PRAGMA journal_mode=WAL", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        ap_log_error(APLOG_MARK, APLOG_WARNING, 0, NULL,
-                     "mod_wsgi (pid=%d): Failed to enable WAL mode: %s",
-                     getpid(), errmsg);
-        sqlite3_free(errmsg);
-    }
-    
-    /* Set synchronous mode to NORMAL for better performance */
-    sqlite3_exec(wsgi_status_db, "PRAGMA synchronous=NORMAL", NULL, NULL, NULL);
     
     /* Set busy timeout to avoid lock contention issues */
     sqlite3_busy_timeout(wsgi_status_db, 5000);  /* 5 second timeout */
