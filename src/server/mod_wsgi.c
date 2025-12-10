@@ -7441,7 +7441,15 @@ static int wsgi_hook_handler(request_rec *r)
      */
 
 #if defined(MOD_WSGI_WITH_DAEMONS)
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                 "mod_wsgi (pid=%d): wsgi_hook_handler calling wsgi_execute_remote for uri=%s process_group=%s",
+                 getpid(), r->uri, config->process_group ? config->process_group : "(null)");
+
     status = wsgi_execute_remote(r);
+
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                 "mod_wsgi (pid=%d): wsgi_execute_remote returned status=%d",
+                 getpid(), status);
 
     if (status != DECLINED)
         return status;
