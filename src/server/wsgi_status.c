@@ -23,7 +23,6 @@
 #include <sqlite3.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <stdlib.h>
 
 /* ------------------------------------------------------------------------- */
 
@@ -76,16 +75,6 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
     /* Remove old database file if it exists (clean start on restart) */
     unlink(db_path);
     
-    /* Also remove any old journal, WAL and SHM files */
-    {
-        char *journal_path = apr_pstrcat(pool, db_path, "-journal", NULL);
-        char *wal_path = apr_pstrcat(pool, db_path, "-wal", NULL);
-        char *shm_path = apr_pstrcat(pool, db_path, "-shm", NULL);
-        unlink(journal_path);
-        unlink(wal_path);
-        unlink(shm_path);
-    }
-    
     /* Create and open database */
     rc = sqlite3_open(db_path, &db);
     if (rc != SQLITE_OK) {
@@ -96,14 +85,17 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
         return -1;
     }
     
-    /* Enable WAL mode for concurrent access from multiple processes */
-    rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL", NULL, NULL, &errmsg);
-    if (rc != SQLITE_OK) {
-        ap_log_error(APLOG_MARK, APLOG_WARNING, 0, NULL,
-                     "mod_wsgi (pid=%d): Failed to enable WAL mode: %s",
-                     getpid(), errmsg);
-        sqlite3_free(errmsg);
-    }
+    /* 
+     * Disable journaling completely. This avoids the need to create
+     * -wal, -shm, or -journal files which would fail if the daemon
+     * processes don't have write permission to the directory.
+     * This is safe for monitoring data since it's transient and
+     * rebuilt on every restart anyway.
+     */
+    sqlite3_exec(db, "PRAGMA journal_mode=OFF", NULL, NULL, NULL);
+    
+    /* Set busy timeout to handle concurrent access */
+    sqlite3_busy_timeout(db, 5000);
     
     /* Create table */
     rc = sqlite3_exec(db,
@@ -132,58 +124,13 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
         "CREATE INDEX IF NOT EXISTS idx_active_requests_pid ON active_requests(pid)",
         NULL, NULL, NULL);
     
-    /* 
-     * Insert and delete a dummy row to force WAL file creation.
-     * Just creating tables doesn't necessarily create the WAL files.
-     */
-    sqlite3_exec(db, 
-        "INSERT INTO active_requests VALUES ('_init_', '_init_', 0, 0, '', '', 0)",
-        NULL, NULL, NULL);
-    sqlite3_exec(db,
-        "DELETE FROM active_requests WHERE request_id = '_init_'",
-        NULL, NULL, NULL);
-    
-    /* Checkpoint to flush WAL to main database */
-    sqlite3_wal_checkpoint(db, NULL);
-    
     sqlite3_close(db);
     
     /* 
      * Set file permissions to allow daemon processes to access.
      * Mode 0666 allows read/write for owner, group, and others.
-     * This must be done AFTER enabling WAL mode and doing writes
-     * because WAL mode creates the -wal and -shm files on first write.
      */
     chmod(db_path, 0666);
-    
-    /* Set permissions on WAL and SHM files created by WAL mode */
-    {
-        char *wal_path = apr_pstrcat(pool, db_path, "-wal", NULL);
-        char *shm_path = apr_pstrcat(pool, db_path, "-shm", NULL);
-        chmod(wal_path, 0666);
-        chmod(shm_path, 0666);
-    }
-    
-#ifdef __linux__
-    /*
-     * On SELinux-enabled systems, set the correct security context
-     * so that httpd daemon processes can access the files.
-     * Use the same context as httpd's runtime files.
-     */
-    {
-        char *cmd;
-        
-        /* Set SELinux context to httpd_sys_rw_content_t for read-write access */
-        cmd = apr_psprintf(pool, "/usr/bin/chcon -t httpd_sys_rw_content_t '%s' 2>/dev/null", db_path);
-        system(cmd);
-        
-        cmd = apr_psprintf(pool, "/usr/bin/chcon -t httpd_sys_rw_content_t '%s-wal' 2>/dev/null", db_path);
-        system(cmd);
-        
-        cmd = apr_psprintf(pool, "/usr/bin/chcon -t httpd_sys_rw_content_t '%s-shm' 2>/dev/null", db_path);
-        system(cmd);
-    }
-#endif
     
     ap_log_error(APLOG_MARK, APLOG_INFO, 0, NULL,
                  "mod_wsgi (pid=%d): Status database created at '%s'",
@@ -211,8 +158,6 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
     /* 
      * Open database connection with explicit read-write mode.
      * The file should already exist (created by parent process).
-     * WAL mode is already configured by the parent, so we don't
-     * need to set it again.
      */
     rc = sqlite3_open_v2(db_path, &wsgi_status_db, 
                          SQLITE_OPEN_READWRITE, NULL);
@@ -226,6 +171,9 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
         }
         return -1;
     }
+    
+    /* Disable journaling - must match what parent set */
+    sqlite3_exec(wsgi_status_db, "PRAGMA journal_mode=OFF", NULL, NULL, NULL);
     
     /* Set busy timeout to avoid lock contention issues */
     sqlite3_busy_timeout(wsgi_status_db, 5000);  /* 5 second timeout */
