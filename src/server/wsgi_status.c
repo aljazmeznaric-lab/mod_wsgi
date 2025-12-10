@@ -213,8 +213,21 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
                      getpid(), sqlite3_errmsg(wsgi_status_db));
     }
     
-    /* Clean up any stale entries from previous instances of this PID */
-    wsgi_status_cleanup(getpid());
+    /* 
+     * Clean up any stale entries from previous instances of this PID.
+     * Note: Don't call wsgi_status_cleanup() here as it would close the DB!
+     * Just delete stale entries directly.
+     */
+    {
+        sqlite3_stmt *cleanup_stmt;
+        if (sqlite3_prepare_v2(wsgi_status_db,
+                "DELETE FROM active_requests WHERE pid = ?",
+                -1, &cleanup_stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_int(cleanup_stmt, 1, getpid());
+            sqlite3_step(cleanup_stmt);
+            sqlite3_finalize(cleanup_stmt);
+        }
+    }
     
     /* Create mutex for thread safety */
     apr_thread_mutex_create(&wsgi_status_mutex, APR_THREAD_MUTEX_DEFAULT, pool);
