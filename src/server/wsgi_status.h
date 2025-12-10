@@ -26,9 +26,17 @@
 /* ------------------------------------------------------------------------- */
 
 /*
- * Initialize the status tracking database. Should be called during
- * Apache child process initialization. The db_path parameter specifies
- * where to store the SQLite database file.
+ * Create the status tracking database file. Should be called during
+ * Apache post_config hook (in the parent process) before daemon processes
+ * are forked. This ensures the database file is created with proper
+ * permissions that daemon processes can access.
+ */
+extern int wsgi_status_create_db(apr_pool_t *pool, const char *db_path);
+
+/*
+ * Initialize the status tracking database connection. Should be called during
+ * daemon process initialization. The database file should already exist
+ * (created by wsgi_status_create_db in the parent process).
  */
 extern int wsgi_status_init(apr_pool_t *pool, const char *db_path);
 

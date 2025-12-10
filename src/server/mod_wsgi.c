@@ -13544,6 +13544,30 @@ static int wsgi_hook_init(apr_pool_t *pconf, apr_pool_t *ptemp,
         wsgi_python_init(pconf);
 
     /*
+     * Create the status tracking database if server metrics are enabled.
+     * This must be done in the parent process (which runs as root) before
+     * daemon processes are forked, so that the database file is created
+     * with proper permissions that daemon processes can access.
+     */
+
+#if defined(MOD_WSGI_WITH_DAEMONS)
+    if (wsgi_server_config && wsgi_server_config->server_metrics &&
+            wsgi_server_config->socket_prefix) {
+        const char *status_db_path;
+
+        status_db_path = apr_pstrcat(pconf, wsgi_server_config->socket_prefix,
+                                     "_status.db", NULL);
+
+        if (wsgi_status_create_db(pconf, status_db_path) != 0) {
+            ap_log_error(APLOG_MARK, APLOG_WARNING, 0, NULL,
+                         "mod_wsgi (pid=%d): Failed to create status database. "
+                         "The /wsgi-status endpoint may not work correctly.",
+                         getpid());
+        }
+    }
+#endif
+
+    /*
      * Startup separate named daemon processes. This is
      * a bit tricky as we only want to do this after the
      * scoreboard has been created. On the initial server

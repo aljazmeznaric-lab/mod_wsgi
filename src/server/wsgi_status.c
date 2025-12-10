@@ -22,6 +22,7 @@
 
 #include <sqlite3.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 /* ------------------------------------------------------------------------- */
 
@@ -54,6 +55,107 @@ static apr_status_t wsgi_status_pool_cleanup(void *data)
 
 /* ------------------------------------------------------------------------- */
 
+/*
+ * Create the status database in the parent process before forking daemons.
+ * This runs as root and can create the file with proper permissions.
+ */
+int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
+{
+    sqlite3 *db = NULL;
+    int rc;
+    char *errmsg = NULL;
+    
+    if (!db_path || !*db_path) {
+        return -1;
+    }
+    
+    /* Store the path globally */
+    wsgi_status_db_path = apr_pstrdup(pool, db_path);
+    
+    /* Remove old database file if it exists (clean start on restart) */
+    unlink(db_path);
+    
+    /* Also remove WAL and SHM files */
+    {
+        char *wal_path = apr_pstrcat(pool, db_path, "-wal", NULL);
+        char *shm_path = apr_pstrcat(pool, db_path, "-shm", NULL);
+        unlink(wal_path);
+        unlink(shm_path);
+    }
+    
+    /* Create and open database */
+    rc = sqlite3_open(db_path, &db);
+    if (rc != SQLITE_OK) {
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL,
+                     "mod_wsgi (pid=%d): Failed to create status database '%s': %s",
+                     getpid(), db_path, sqlite3_errmsg(db));
+        if (db) sqlite3_close(db);
+        return -1;
+    }
+    
+    /* Enable WAL mode for concurrent access from multiple processes */
+    rc = sqlite3_exec(db, "PRAGMA journal_mode=WAL", NULL, NULL, &errmsg);
+    if (rc != SQLITE_OK) {
+        ap_log_error(APLOG_MARK, APLOG_WARNING, 0, NULL,
+                     "mod_wsgi (pid=%d): Failed to enable WAL mode: %s",
+                     getpid(), errmsg);
+        sqlite3_free(errmsg);
+    }
+    
+    /* Create table */
+    rc = sqlite3_exec(db,
+        "CREATE TABLE IF NOT EXISTS active_requests ("
+        "  request_id TEXT PRIMARY KEY,"
+        "  pool_name TEXT NOT NULL,"
+        "  worker_id INTEGER NOT NULL,"
+        "  pid INTEGER NOT NULL,"
+        "  uri TEXT,"
+        "  method TEXT,"
+        "  start_time REAL NOT NULL"
+        ")",
+        NULL, NULL, &errmsg);
+    
+    if (rc != SQLITE_OK) {
+        ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL,
+                     "mod_wsgi (pid=%d): Failed to create active_requests table: %s",
+                     getpid(), errmsg);
+        sqlite3_free(errmsg);
+        sqlite3_close(db);
+        return -1;
+    }
+    
+    /* Create index on pid for efficient cleanup */
+    sqlite3_exec(db,
+        "CREATE INDEX IF NOT EXISTS idx_active_requests_pid ON active_requests(pid)",
+        NULL, NULL, NULL);
+    
+    sqlite3_close(db);
+    
+    /* Set file permissions to allow daemon processes to access */
+    /* Mode 0666 allows read/write for owner, group, and others */
+    chmod(db_path, 0666);
+    
+    /* Also set permissions on WAL file if it was created */
+    {
+        char *wal_path = apr_pstrcat(pool, db_path, "-wal", NULL);
+        char *shm_path = apr_pstrcat(pool, db_path, "-shm", NULL);
+        chmod(wal_path, 0666);
+        chmod(shm_path, 0666);
+    }
+    
+    ap_log_error(APLOG_MARK, APLOG_INFO, 0, NULL,
+                 "mod_wsgi (pid=%d): Status database created at '%s'",
+                 getpid(), db_path);
+    
+    return 0;
+}
+
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Initialize database connection in daemon process.
+ * The database file should already exist (created by wsgi_status_create_db).
+ */
 int wsgi_status_init(apr_pool_t *pool, const char *db_path)
 {
     int rc;
@@ -65,12 +167,16 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
     
     wsgi_status_db_path = apr_pstrdup(pool, db_path);
     
-    /* Open database connection */
+    /* Open database connection (file should already exist) */
     rc = sqlite3_open(db_path, &wsgi_status_db);
     if (rc != SQLITE_OK) {
         ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL,
                      "mod_wsgi (pid=%d): Failed to open status database '%s': %s",
                      getpid(), db_path, sqlite3_errmsg(wsgi_status_db));
+        if (wsgi_status_db) {
+            sqlite3_close(wsgi_status_db);
+            wsgi_status_db = NULL;
+        }
         return -1;
     }
     
@@ -88,34 +194,6 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
     
     /* Set busy timeout to avoid lock contention issues */
     sqlite3_busy_timeout(wsgi_status_db, 5000);  /* 5 second timeout */
-    
-    /* Create table if it doesn't exist */
-    rc = sqlite3_exec(wsgi_status_db,
-        "CREATE TABLE IF NOT EXISTS active_requests ("
-        "  request_id TEXT PRIMARY KEY,"
-        "  pool_name TEXT NOT NULL,"
-        "  worker_id INTEGER NOT NULL,"
-        "  pid INTEGER NOT NULL,"
-        "  uri TEXT,"
-        "  method TEXT,"
-        "  start_time REAL NOT NULL"
-        ")",
-        NULL, NULL, &errmsg);
-    
-    if (rc != SQLITE_OK) {
-        ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL,
-                     "mod_wsgi (pid=%d): Failed to create active_requests table: %s",
-                     getpid(), errmsg);
-        sqlite3_free(errmsg);
-        sqlite3_close(wsgi_status_db);
-        wsgi_status_db = NULL;
-        return -1;
-    }
-    
-    /* Create index on pid for efficient cleanup */
-    sqlite3_exec(wsgi_status_db,
-        "CREATE INDEX IF NOT EXISTS idx_active_requests_pid ON active_requests(pid)",
-        NULL, NULL, NULL);
     
     /* Prepare insert statement */
     rc = sqlite3_prepare_v2(wsgi_status_db,
