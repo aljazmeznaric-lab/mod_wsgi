@@ -212,7 +212,7 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
     apr_pool_cleanup_register(pool, NULL, wsgi_status_pool_cleanup,
                               apr_pool_cleanup_null);
     
-    ap_log_error(APLOG_MARK, APLOG_INFO, 0, NULL,
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
                  "mod_wsgi (pid=%d): Status database initialized at '%s' "
                  "(db=%p insert_stmt=%p delete_stmt=%p)",
                  getpid(), db_path, wsgi_status_db, 
@@ -232,14 +232,14 @@ void wsgi_status_request_start(
     const char *method)
 {
     if (!wsgi_status_db || !wsgi_status_insert_stmt) {
-        ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, NULL,
+        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
                      "mod_wsgi (pid=%d): wsgi_status_request_start skipped - "
                      "db=%p stmt=%p",
                      getpid(), wsgi_status_db, wsgi_status_insert_stmt);
         return;
     }
     
-    ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, NULL,
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
                  "mod_wsgi (pid=%d): Tracking request start: id=%s uri=%s",
                  getpid(), request_id ? request_id : "(null)", 
                  uri ? uri : "(null)");

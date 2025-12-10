@@ -13368,6 +13368,10 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
             WSGIThreadInfo *thread_info = wsgi_thread_info(0, 0);
             int worker_id = thread_info ? thread_info->thread_id : 0;
 
+            ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
+                         "mod_wsgi (pid=%d): About to track request: uri=%s log_id=%s",
+                         getpid(), r->uri, r->log_id ? r->log_id : "(null)");
+
             wsgi_status_request_start(
                 r->log_id,
                 wsgi_daemon_process->group->name,
