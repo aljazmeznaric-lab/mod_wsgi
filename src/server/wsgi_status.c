@@ -134,10 +134,6 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
      */
     chmod(db_path, 0666);
     
-    ap_log_error(APLOG_MARK, APLOG_INFO, 0, NULL,
-                 "mod_wsgi (pid=%d): Status database created at '%s'",
-                 getpid(), db_path);
-    
     return 0;
 }
 
