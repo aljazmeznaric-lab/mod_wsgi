@@ -43,14 +43,26 @@ extern int wsgi_status_init(apr_pool_t *pool, const char *db_path);
 /*
  * Called when a request starts processing in a daemon worker thread.
  * Records the request in the shared database.
+ * 
+ * Parameters:
+ *   request_id - unique identifier for the request
+ *   pool_name  - name of the WSGI daemon process group
+ *   worker_id  - index of daemon process within the pool (0 to processes-1)
+ *   thread_id  - index of thread within the daemon process (0 to threads-1)
+ *   pid        - OS process ID of the daemon
+ *   uri        - request URI (SCRIPT_NAME + PATH_INFO)
+ *   method     - HTTP method (GET, POST, etc.)
+ *   status     - request status ("queued" or "processing")
  */
 extern void wsgi_status_request_start(
     const char *request_id,
     const char *pool_name,
     int worker_id,
+    int thread_id,
     pid_t pid,
     const char *uri,
-    const char *method
+    const char *method,
+    const char *status
 );
 
 /*

@@ -103,9 +103,11 @@ int wsgi_status_create_db(apr_pool_t *pool, const char *db_path)
         "  request_id TEXT PRIMARY KEY,"
         "  pool_name TEXT NOT NULL,"
         "  worker_id INTEGER NOT NULL,"
+        "  thread_id INTEGER NOT NULL,"
         "  pid INTEGER NOT NULL,"
         "  uri TEXT,"
         "  method TEXT,"
+        "  status TEXT NOT NULL DEFAULT 'processing',"
         "  start_time REAL NOT NULL"
         ")",
         NULL, NULL, &errmsg);
@@ -181,8 +183,8 @@ int wsgi_status_init(apr_pool_t *pool, const char *db_path)
     /* Prepare insert statement */
     rc = sqlite3_prepare_v2(wsgi_status_db,
         "INSERT OR REPLACE INTO active_requests "
-        "(request_id, pool_name, worker_id, pid, uri, method, start_time) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "(request_id, pool_name, worker_id, thread_id, pid, uri, method, status, start_time) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         -1, &wsgi_status_insert_stmt, NULL);
     
     if (rc != SQLITE_OK) {
@@ -238,9 +240,11 @@ void wsgi_status_request_start(
     const char *request_id,
     const char *pool_name,
     int worker_id,
+    int thread_id,
     pid_t pid,
     const char *uri,
-    const char *method)
+    const char *method,
+    const char *status)
 {
     if (!wsgi_status_db || !wsgi_status_insert_stmt) {
         return;
@@ -255,10 +259,12 @@ void wsgi_status_request_start(
     sqlite3_bind_text(wsgi_status_insert_stmt, 1, request_id ? request_id : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(wsgi_status_insert_stmt, 2, pool_name ? pool_name : "", -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(wsgi_status_insert_stmt, 3, worker_id);
-    sqlite3_bind_int(wsgi_status_insert_stmt, 4, pid);
-    sqlite3_bind_text(wsgi_status_insert_stmt, 5, uri ? uri : "", -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(wsgi_status_insert_stmt, 6, method ? method : "", -1, SQLITE_TRANSIENT);
-    sqlite3_bind_double(wsgi_status_insert_stmt, 7, (double)apr_time_now() / APR_USEC_PER_SEC);
+    sqlite3_bind_int(wsgi_status_insert_stmt, 4, thread_id);
+    sqlite3_bind_int(wsgi_status_insert_stmt, 5, pid);
+    sqlite3_bind_text(wsgi_status_insert_stmt, 6, uri ? uri : "", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(wsgi_status_insert_stmt, 7, method ? method : "", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(wsgi_status_insert_stmt, 8, status ? status : "processing", -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(wsgi_status_insert_stmt, 9, (double)apr_time_now() / APR_USEC_PER_SEC);
     
     if (sqlite3_step(wsgi_status_insert_stmt) != SQLITE_DONE) {
         ap_log_error(APLOG_MARK, APLOG_WARNING, 0, NULL,
@@ -440,7 +446,7 @@ int wsgi_status_handler(request_rec *r)
     
     /* Query all active requests */
     rc = sqlite3_prepare_v2(db,
-        "SELECT request_id, pool_name, worker_id, pid, uri, method, start_time "
+        "SELECT request_id, pool_name, worker_id, thread_id, pid, uri, method, status, start_time "
         "FROM active_requests ORDER BY start_time",
         -1, &stmt, NULL);
     
@@ -449,10 +455,12 @@ int wsgi_status_handler(request_rec *r)
             const char *request_id = (const char *)sqlite3_column_text(stmt, 0);
             const char *pool_name = (const char *)sqlite3_column_text(stmt, 1);
             int worker_id = sqlite3_column_int(stmt, 2);
-            int pid = sqlite3_column_int(stmt, 3);
-            const char *uri = (const char *)sqlite3_column_text(stmt, 4);
-            const char *method = (const char *)sqlite3_column_text(stmt, 5);
-            double start_time = sqlite3_column_double(stmt, 6);
+            int thread_id = sqlite3_column_int(stmt, 3);
+            int pid = sqlite3_column_int(stmt, 4);
+            const char *uri = (const char *)sqlite3_column_text(stmt, 5);
+            const char *method = (const char *)sqlite3_column_text(stmt, 6);
+            const char *status = (const char *)sqlite3_column_text(stmt, 7);
+            double start_time = sqlite3_column_double(stmt, 8);
             double duration = ((double)now / APR_USEC_PER_SEC) - start_time;
             
             if (!first) {
@@ -471,6 +479,7 @@ int wsgi_status_handler(request_rec *r)
             ap_rputs(",\n", r);
             
             ap_rprintf(r, "      \"worker_id\": %d,\n", worker_id);
+            ap_rprintf(r, "      \"thread_id\": %d,\n", thread_id);
             ap_rprintf(r, "      \"pid\": %d,\n", pid);
             
             ap_rputs("      \"uri\": ", r);
@@ -479,6 +488,10 @@ int wsgi_status_handler(request_rec *r)
             
             ap_rputs("      \"method\": ", r);
             wsgi_json_escape_string(r, method);
+            ap_rputs(",\n", r);
+            
+            ap_rputs("      \"status\": ", r);
+            wsgi_json_escape_string(r, status);
             ap_rputs(",\n", r);
             
             ap_rprintf(r, "      \"start_time\": %.3f,\n", start_time);

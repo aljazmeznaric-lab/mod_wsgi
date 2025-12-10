@@ -13365,7 +13365,7 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
          */
         if (wsgi_daemon_process->group->server_metrics) {
             WSGIThreadInfo *thread_info = wsgi_thread_info(0, 0);
-            int worker_id = thread_info ? thread_info->thread_id : 0;
+            int thread_id = thread_info ? thread_info->thread_id : 0;
             const char *script_name;
             const char *path_info;
             const char *request_method;
@@ -13390,10 +13390,12 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
             wsgi_status_request_start(
                 r->log_id,
                 wsgi_daemon_process->group->name,
-                worker_id,
+                wsgi_daemon_process->instance,  /* worker_id: process index 0-N */
+                thread_id,                       /* thread_id: thread within process */
                 getpid(),
                 full_uri,
-                request_method ? request_method : ""
+                request_method ? request_method : "",
+                "processing"
             );
         }
 
