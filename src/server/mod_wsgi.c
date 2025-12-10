@@ -10382,21 +10382,11 @@ static int wsgi_start_process(apr_pool_t *p, WSGIDaemonProcess *daemon)
          * visibility of active requests.
          */
 
-        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, wsgi_server,
-                     "mod_wsgi (pid=%d): Daemon init status check: "
-                     "group=%s server_metrics=%d",
-                     getpid(), daemon->group->name,
-                     daemon->group->server_metrics);
-
         if (daemon->group->server_metrics) {
             const char *status_db_path;
 
             status_db_path = apr_pstrcat(p, wsgi_server_config->socket_prefix,
                                          "_status.db", NULL);
-
-            ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, wsgi_server,
-                         "mod_wsgi (pid=%d): Initializing status tracking for '%s' at '%s'",
-                         getpid(), daemon->group->name, status_db_path);
 
             if (wsgi_status_init(wsgi_daemon_pool, status_db_path) != 0) {
                 ap_log_error(APLOG_MARK, APLOG_WARNING, 0, wsgi_server,
@@ -13376,17 +13366,25 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
         if (wsgi_daemon_process->group->server_metrics) {
             WSGIThreadInfo *thread_info = wsgi_thread_info(0, 0);
             int worker_id = thread_info ? thread_info->thread_id : 0;
+            const char *script_name;
+            const char *path_info;
+            const char *request_method;
+            char *full_uri;
 
-            /* Debug tracking */
-            {
-                FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
-                if (fp) {
-                    fprintf(fp, "About to track: pid=%d uri=%s log_id=%s worker=%d\n", 
-                            getpid(), r->uri ? r->uri : "(null)",
-                            r->log_id ? r->log_id : "(null)", worker_id);
-                    fflush(fp);
-                    fclose(fp);
-                }
+            /* 
+             * In daemon mode, r->uri is NULL. Get URI from subprocess_env
+             * which contains SCRIPT_NAME and PATH_INFO from the proxy.
+             */
+            script_name = apr_table_get(r->subprocess_env, "SCRIPT_NAME");
+            path_info = apr_table_get(r->subprocess_env, "PATH_INFO");
+            request_method = apr_table_get(r->subprocess_env, "REQUEST_METHOD");
+            
+            if (script_name && path_info) {
+                full_uri = apr_pstrcat(r->pool, script_name, path_info, NULL);
+            } else if (script_name) {
+                full_uri = (char *)script_name;
+            } else {
+                full_uri = "";
             }
 
             wsgi_status_request_start(
@@ -13394,19 +13392,9 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
                 wsgi_daemon_process->group->name,
                 worker_id,
                 getpid(),
-                r->uri,
-                r->method
+                full_uri,
+                request_method ? request_method : ""
             );
-            
-            /* Debug after insert */
-            {
-                FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
-                if (fp) {
-                    fprintf(fp, "After wsgi_status_request_start\n");
-                    fflush(fp);
-                    fclose(fp);
-                }
-            }
         }
 
         if (wsgi_execute_script(r) != OK) {
@@ -13419,16 +13407,6 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
          */
         if (wsgi_daemon_process->group->server_metrics) {
             wsgi_status_request_end(r->log_id);
-            
-            /* Debug after delete */
-            {
-                FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
-                if (fp) {
-                    fprintf(fp, "After wsgi_status_request_end\n");
-                    fflush(fp);
-                    fclose(fp);
-                }
-            }
         }
     }
 
@@ -13616,10 +13594,6 @@ static int wsgi_hook_init(apr_pool_t *pconf, apr_pool_t *ptemp,
 
         status_db_path = apr_pstrcat(pconf, wsgi_server_config->socket_prefix,
                                      "_status.db", NULL);
-
-        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
-                     "mod_wsgi (pid=%d): Creating status database at '%s'",
-                     getpid(), status_db_path);
 
         if (wsgi_status_create_db(pconf, status_db_path) != 0) {
             ap_log_error(APLOG_MARK, APLOG_WARNING, 0, NULL,
