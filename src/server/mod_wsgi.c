@@ -8706,20 +8706,6 @@ static void wsgi_process_socket(apr_pool_t *p, apr_socket_t *sock,
     ap_sb_handle_t *sbh;
     core_net_rec *net;
 
-    /* Debug: write directly to file to verify function is called */
-    {
-        FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
-        if (fp) {
-            fprintf(fp, "wsgi_process_socket called pid=%d group=%s\n", 
-                    getpid(), daemon->group->name);
-            fflush(fp);
-            fclose(fp);
-        }
-    }
-    
-    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, wsgi_server,
-                 "mod_wsgi (pid=%d): wsgi_process_socket called for group '%s'",
-                 getpid(), daemon->group->name);
 
     /*
      * This duplicates Apache connection setup. This is done
@@ -13391,9 +13377,17 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
             WSGIThreadInfo *thread_info = wsgi_thread_info(0, 0);
             int worker_id = thread_info ? thread_info->thread_id : 0;
 
-            ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
-                         "mod_wsgi (pid=%d): About to track request: uri=%s log_id=%s",
-                         getpid(), r->uri, r->log_id ? r->log_id : "(null)");
+            /* Debug tracking */
+            {
+                FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+                if (fp) {
+                    fprintf(fp, "About to track: pid=%d uri=%s log_id=%s worker=%d\n", 
+                            getpid(), r->uri ? r->uri : "(null)",
+                            r->log_id ? r->log_id : "(null)", worker_id);
+                    fflush(fp);
+                    fclose(fp);
+                }
+            }
 
             wsgi_status_request_start(
                 r->log_id,
@@ -13403,6 +13397,16 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
                 r->uri,
                 r->method
             );
+            
+            /* Debug after insert */
+            {
+                FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+                if (fp) {
+                    fprintf(fp, "After wsgi_status_request_start\n");
+                    fflush(fp);
+                    fclose(fp);
+                }
+            }
         }
 
         if (wsgi_execute_script(r) != OK) {
@@ -13415,6 +13419,16 @@ static int wsgi_hook_daemon_handler(conn_rec *c)
          */
         if (wsgi_daemon_process->group->server_metrics) {
             wsgi_status_request_end(r->log_id);
+            
+            /* Debug after delete */
+            {
+                FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+                if (fp) {
+                    fprintf(fp, "After wsgi_status_request_end\n");
+                    fflush(fp);
+                    fclose(fp);
+                }
+            }
         }
     }
 

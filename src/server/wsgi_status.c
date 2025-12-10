@@ -231,18 +231,21 @@ void wsgi_status_request_start(
     const char *uri,
     const char *method)
 {
+    /* Debug file logging */
+    {
+        FILE *fp = fopen("/tmp/wsgi_debug.log", "a");
+        if (fp) {
+            fprintf(fp, "wsgi_status_request_start: db=%p stmt=%p id=%s uri=%s\n",
+                    (void*)wsgi_status_db, (void*)wsgi_status_insert_stmt,
+                    request_id ? request_id : "(null)", uri ? uri : "(null)");
+            fflush(fp);
+            fclose(fp);
+        }
+    }
+
     if (!wsgi_status_db || !wsgi_status_insert_stmt) {
-        ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
-                     "mod_wsgi (pid=%d): wsgi_status_request_start skipped - "
-                     "db=%p stmt=%p",
-                     getpid(), wsgi_status_db, wsgi_status_insert_stmt);
         return;
     }
-    
-    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, NULL,
-                 "mod_wsgi (pid=%d): Tracking request start: id=%s uri=%s",
-                 getpid(), request_id ? request_id : "(null)", 
-                 uri ? uri : "(null)");
     
     if (wsgi_status_mutex) {
         apr_thread_mutex_lock(wsgi_status_mutex);
